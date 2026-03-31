@@ -1,0 +1,43 @@
+Meeting Information
+Meeting: Lab 6
+Date: 31/03
+Time: 3-5
+Location: Dry Lab
+Minutes Taker: Max
+___________________________________________
+
+Attendees
+Present: Max, Selina, Antonio
+Absent: Alex
+___________________________________________
+
+Agenda Items & Notes
+- Read through assignment doc
+- Discussed allocation of work
+- Reviewed interrupts
+- Reached out to Alex
+___________________________________________
+
+Action Items (Tasks)
+
+- Task: 7.1 IO
+- Assigned to: Alex
+- Status: Open
+
+- Task: 7.2 Timers
+- Assigned to: Antonio
+- Status: Open
+
+- Task: 7.3 UART
+- Assigned to: Selina
+- Status: Open
+
+- Task: 7.4 I2C
+- Assigned to: Max
+- Status: Open
+___________________________________________
+
+Next Meeting
+Date: ??
+Time: ??
+Objective: Progress update
