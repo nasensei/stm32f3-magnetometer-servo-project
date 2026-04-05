@@ -17,13 +17,55 @@
  */
 
 #include <stdint.h>
+#include "serial.h"
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
-  #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
+#warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
+
+typedef struct __attribute__((packed)) {
+    int16_t heading_deg_x10;
+    uint8_t button_pressed;
+    uint16_t sample_count;
+} HeadingMessage;
+
+static void delay_cycles(volatile uint32_t count)
+{
+    while (count--) {
+        __asm__("nop");
+    }
+}
 
 int main(void)
 {
-    /* Loop forever */
-	for(;;);
+    /* If you later configure clocks, update this value accordingly */
+    serial_init(8000000UL, 115200UL);
+
+    serial_send_string("USART1 ready\r\n");
+    serial_send_string("Type 4 characters in your serial terminal:\r\n");
+
+    /* --- Task a: receive raw bytes of known length --- */
+    uint8_t rx_buf[4];
+    serial_recv_bytes(rx_buf, sizeof(rx_buf));
+
+    serial_send_string("Received bytes: ");
+    serial_send_bytes(rx_buf, sizeof(rx_buf));
+    serial_send_string("\r\n");
+
+    /* --- Task b: debug string --- */
+    serial_send_string("sendString() is working\r\n");
+
+    /* --- Task c: send structured message --- */
+    HeadingMessage msg;
+    msg.heading_deg_x10 = 1234;   /* 123.4 degrees */
+    msg.button_pressed  = 1U;
+    msg.sample_count    = 42U;
+
+    serial_send_string("Sending framed binary packet...\r\n");
+    (void)serial_send_msg(SERIAL_MSG_HEADING, &msg, sizeof(msg));
+
+    for (;;) {
+        serial_send_string("Heartbeat\r\n");
+        delay_cycles(800000U);
+    }
 }
