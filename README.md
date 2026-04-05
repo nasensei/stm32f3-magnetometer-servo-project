@@ -29,7 +29,7 @@ The overall aim of this project is not only to produce working code, but also to
 | Name | SID | Primary Responsibility | Secondary Responsibility |
 |------|-----|------------------------|--------------------------|
 | `Selina Nguyen` | `530531201` | `UART serial module` | `Integration` |
-| `<Member 2>` | `<SID>` | `<e.g. Timer + PWM/Servo module>` | `<Testing/ Documentation>` |
+| `Tung Lin Wu` | `550718161` | `PWM timer section` | `Integration` |
 | `<Member 3>` | `<SID>` | `<e.g. Digital I/O + LED/Button module>` | `<Testing / debugging>` |
 | `<Member 4>` | `<SID>` | `<e.g. I2C magnetometer + integration>` | `<Minutes / documentation>` |
 
