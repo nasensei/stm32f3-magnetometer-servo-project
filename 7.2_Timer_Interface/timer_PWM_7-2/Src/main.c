@@ -17,13 +17,71 @@
  */
 
 #include <stdint.h>
+#include "stm32f303xc.h"
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+static void (*timer_callback)(void) = 0x00; //later this will adopt the address of timer_task //static to make it private
+
+void TIM2_IRQHandler(void)
+{
+    if (TIM2->SR & TIM_SR_UIF) {
+        TIM2->SR &= ~TIM_SR_UIF;   // clear interrupt flag
+
+        if (timer_callback != 0) {
+            timer_callback();
+        }
+    }
+}
+
+void enable_clock_tim2(void) {
+	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+}
+
+void set_prescaler(uint32_t prescaler) {
+	//prescaler: 8MHz (input clock)/(7 (PSC) + 1) = 1MHz (1 tick per microecond)
+	TIM2->CR1 &= ~TIM_CR1_CEN;
+	TIM2->PSC = prescaler;
+}
+
+void set_autoReloadValue(uint32_t arr) {
+	TIM2->CR1 &= ~TIM_CR1_CEN;
+	TIM2->ARR = arr;
+}
+
+void timer_task(void)
+{
+    // code to run every timer period
+}
+
+void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void)) {
+	enable_clock_tim2();
+
+	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
+
+	set_prescaler(prescaler_val);
+
+	set_autoReloadValue(arr_val);
+
+	TIM2->CNT = 0; //set timer to 0
+	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
+
+	//use interrupt
+	TIM2->DIER |= TIM_DIER_UIE; //turn on UIF for interrupt flag when overflow
+	NVIC_EnableIRQ(TIM2_IRQn);
+
+	TIM2->CR1 |= TIM_CR1_CEN; //start timer
+}
+
 int main(void)
 {
     /* Loop forever */
-	for(;;);
+
+	tim2_init(7, 999, timer_task); //1ms period (psc val(7 for 1MHz), ARR (ms if psc = 7), what task do you want interrupt to run
+
+	while (1) {
+
+	}
 }
