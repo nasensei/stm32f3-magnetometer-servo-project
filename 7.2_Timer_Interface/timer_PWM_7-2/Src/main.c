@@ -40,6 +40,15 @@ void enable_clock_tim2(void) {
 	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
 }
 
+void enable_clock_LED(void) {
+	RCC->AHBENR |= RCC_AHBENR_GPIOEEN;
+}
+
+void config_LED(void) {
+	uint16_t *led_output_registers = ((uint16_t *)&(GPIOE->MODER)) + 1;
+	*led_output_registers = 0x5555;
+}
+
 void set_prescaler(uint32_t prescaler) {
 	//prescaler: 8MHz (input clock)/(7 (PSC) + 1) = 1MHz (1 tick per microecond)
 	TIM2->CR1 &= ~TIM_CR1_CEN;
@@ -54,6 +63,10 @@ void set_autoReloadValue(uint32_t arr) {
 void timer_task(void)
 {
     // code to run every timer period
+	uint8_t led_mask_pattern = 0b01010101;
+	uint8_t *led_output_register = ((uint8_t*)&(GPIOE->ODR)) + 1;
+
+	*led_output_register ^= led_mask_pattern;
 }
 
 void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void)) {
@@ -68,6 +81,8 @@ void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void))
 	TIM2->CNT = 0; //set timer to 0
 	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
 
+	TIM2->SR &= ~TIM_SR_UIF;//clear flag
+
 	//use interrupt
 	TIM2->DIER |= TIM_DIER_UIE; //turn on UIF for interrupt flag when overflow
 	NVIC_EnableIRQ(TIM2_IRQn);
@@ -78,6 +93,9 @@ void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void))
 int main(void)
 {
     /* Loop forever */
+
+	enable_clock_LED();
+	config_LED();
 
 	tim2_init(7, 999, timer_task); //1ms period (psc val(7 for 1MHz), ARR (ms if psc = 7), what task do you want interrupt to run
 
