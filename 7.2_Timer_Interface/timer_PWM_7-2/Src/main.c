@@ -51,13 +51,25 @@ void config_LED(void) {
 
 void set_prescaler(uint32_t prescaler) {
 	//prescaler: 8MHz (input clock)/(7 (PSC) + 1) = 1MHz (1 tick per microecond)
-	TIM2->CR1 &= ~TIM_CR1_CEN;
-	TIM2->PSC = prescaler;
+	if (TIM2->CR1 & TIM_CR1_CEN) {
+		TIM2->CR1 &= ~TIM_CR1_CEN;
+		TIM2->PSC = prescaler;
+		TIM2->CR1 = TIM_CR1_CEN;
+	}
+	else {
+		TIM2->PSC = prescaler;
+	}
 }
 
 void set_autoReloadValue(uint32_t arr) {
-	TIM2->CR1 &= ~TIM_CR1_CEN;
-	TIM2->ARR = arr;
+	if (TIM2->CR1 & TIM_CR1_CEN) {
+		TIM2->CR1 &= ~TIM_CR1_CEN;
+		TIM2->ARR = arr;
+		TIM2->CR1 = TIM_CR1_CEN;
+	}
+	else {
+		TIM2->ARR = arr;
+	}
 }
 
 void timer_task(void)
@@ -69,14 +81,20 @@ void timer_task(void)
 	*led_output_register ^= led_mask_pattern;
 }
 
-void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void)) {
-	enable_clock_tim2();
+void calc_ms_innit_PSC_ARR(uint32_t amount_ms) {
+	PSC_val  = 7;//make it us
 
-	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
+	set_prescaler(PSC_val);
 
-	set_prescaler(prescaler_val);
+	ARR_val = amount_ms/1000;
 
-	set_autoReloadValue(arr_val);
+	set_autoReloadValue(ARR_val);
+
+	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
+}
+
+void restart_enable_tim2(void) {
+	TIM2->CR1 &= ~TIM_CR1_CEN;
 
 	TIM2->CNT = 0; //set timer to 0
 	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
@@ -85,9 +103,20 @@ void tim2_init(uint32_t prescaler_val, uint32_t arr_val, void (*callback)(void))
 
 	//use interrupt
 	TIM2->DIER |= TIM_DIER_UIE; //turn on UIF for interrupt flag when overflow
-	NVIC_EnableIRQ(TIM2_IRQn);
 
 	TIM2->CR1 |= TIM_CR1_CEN; //start timer
+}
+
+void tim2_init(uint32_t amount_ms, void (*callback)(void)) {
+	enable_clock_tim2();
+
+	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
+
+	calc_ms_innit_PSC_ARR(amount_ms);
+
+	NVIC_EnableIRQ(TIM2_IRQn);
+
+	restart_enable_tim2();
 }
 
 int main(void)
