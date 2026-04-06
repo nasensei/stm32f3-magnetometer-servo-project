@@ -107,16 +107,26 @@ void restart_enable_tim2(void) {
 	TIM2->CR1 |= TIM_CR1_CEN; //start timer
 }
 
-void tim2_init(uint32_t amount_ms, void (*callback)(void)) {
+void tim2_init(uint32_t amount_ms, void (*callback)(void), int change_psc_arr) {
 	enable_clock_tim2();
 
 	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
 
-	calc_ms_innit_PSC_ARR(amount_ms);
+	TIM2->CR1 &= ~TIM_CR1_CEN;
+
+	if (change_psc_arr) {
+		calc_ms_innit_PSC_ARR(amount_ms);
+	}
 
 	NVIC_EnableIRQ(TIM2_IRQn);
 
 	restart_enable_tim2();
+}
+
+void PWM_modelization(uint32_t period_ms) {
+	if (period_ms > 20) {
+		tim2_init(half_period, timer_task, 1);
+	}
 }
 
 int main(void)
@@ -126,7 +136,7 @@ int main(void)
 	enable_clock_LED();
 	config_LED();
 
-	tim2_init(7, 999, timer_task); //1ms period (psc val(7 for 1MHz), ARR (ms if psc = 7), what task do you want interrupt to run
+	PWM_modelization(20);
 
 	while (1) {
 
