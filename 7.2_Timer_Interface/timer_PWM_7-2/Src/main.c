@@ -62,14 +62,9 @@ void set_prescaler(uint32_t prescaler) {
 }
 
 void set_autoReloadValue(uint32_t arr) {
-	if (TIM2->CR1 & TIM_CR1_CEN) {
-		TIM2->CR1 &= ~TIM_CR1_CEN;
-		TIM2->ARR = arr;
-		TIM2->CR1 = TIM_CR1_CEN;
-	}
-	else {
-		TIM2->ARR = arr;
-	}
+	TIM2->ARR = arr;
+
+	TIM2->EGR = TIM_EGR_UG; //update timer ARR
 }
 
 void timer_task(void)
@@ -79,6 +74,8 @@ void timer_task(void)
 	uint8_t *led_output_register = ((uint8_t*)&(GPIOE->ODR)) + 1;
 
 	*led_output_register ^= led_mask_pattern;
+
+	//change ARR depending on the on time and off time
 }
 
 void calc_ms_innit_PSC_ARR(uint32_t amount_ms) {
@@ -123,12 +120,6 @@ void tim2_init(uint32_t amount_ms, void (*callback)(void), int change_psc_arr) {
 	restart_enable_tim2();
 }
 
-void PWM_modelization(uint32_t period_ms) {
-	if (period_ms > 20) {
-		tim2_init(half_period, timer_task, 1);
-	}
-}
-
 int main(void)
 {
     /* Loop forever */
@@ -136,7 +127,7 @@ int main(void)
 	enable_clock_LED();
 	config_LED();
 
-	PWM_modelization(20);
+	tim2_init(1000, timer_task, 1);
 
 	while (1) {
 
