@@ -4,7 +4,9 @@
 #define USART1_TX_PIN   4U   /* PC4 -> USART1_TX */
 #define USART1_RX_PIN   5U   /* PC5 -> USART1_RX */
 #define USART_AF_NUM    7U   /* AF7 for USART1 */
-#define SERIAL_TX_TIMEOUT 1000000U // maybe i will adjust this number later
+// maybe we can change these timeout values in the future
+#define SERIAL_TX_TIMEOUT 1000000U
+#define SERIAL_RX_TIMEOUT 1000000U
 
 // configuring alternate function
 static void gpio_set_alternate_function(GPIO_TypeDef *gpio, uint32_t pin, uint32_t af) {
@@ -91,19 +93,32 @@ bool serial_write_byte(uint8_t byte){
     return true;
 }
 
-uint8_t serial_read_byte(void) {
+bool serial_read_byte(uint8_t *out_byte) {
+	uint32_t timeout = SERIAL_RX_TIMEOUT;
+
+	if (out_byte == NULL) {
+		return false;
+	}
+	// check if USART is enabled for receive
+	if ((USART1->CR1 & (USART_CR1_UE | USART_CR1_RE)) != (USART_CR1_UE | USART_CR1_RE)) {
+	   return false;
+	}
 	// RXNE = Receive data register not empty
 	while ((USART1->ISR & USART_ISR_RXNE) == 0) {
 		// before start reading, make sure that a byte has actually arrived
+		// stopping the loop from waiting forever
+		if (timeout-- == 0U) {
+			return false;
+		}
 	}
 	// USART1->RDR = receive data register
 	// 0xFF = 11111111, mask that keeps only the 8 lowest bits
-	uint8_t retval = (uint8_t)(USART1->RDR & 0xFFU);
-	return retval;
+	*out_byte = (uint8_t)(USART1->RDR & 0xFFU);
+	return true;
 }
 
 bool serial_send_bytes(const uint8_t *data, size_t length) {
-	uint32_t timeout = SERIAL_TX-TIMEOUT;
+	uint32_t timeout = SERIAL_TX_TIMEOUT;
 
 	if (data == NULL && length > 0) {
 		return false;
@@ -124,26 +139,38 @@ bool serial_send_bytes(const uint8_t *data, size_t length) {
 	return true;
 }
 
-void serial_recv_bytes(uint8_t *data, size_t length) {
-	if (data == NULL) {
-		return;
+bool serial_recv_bytes(uint8_t *data, size_t length) {
+	if (data == NULL && length > 0U) {
+		return false;
 	}
 	for (size_t i = 0U; i < length; i++) {
-		data[i] = serial_read_byte();
+		if (!serial_read_byte(&data[i])) {
+			return false;
+		}
 	}
+	return true;
 }
 
-void serial_send_string(const char *str) {
+bool serial_send_string(const char *str) {
+	uint32_t timeout = SERIAL_TX_TIMEOUT;
+
 	if (str == NULL) {
-		return;
+		return false;
 	}
 	while (*str != '\0') {
-		serial_write_byte((uint8_t)(*str));
+		if (!serial_write_byte((uint8_t)(*str))) {
+			return false;
+		}
 		str++;
 	}
 	while ((USART1->ISR & USART_ISR_TC) == 0U) {
 	    // wait until the TC flag is UP
+		// stop the loop from waiting forever
+		if (timeout-- == 0U) {
+			return false;
+		}
     }
+	return true;
 }
 
 bool serial_send_msg(uint8_t msg_type, const void *payload, uint8_t payload_size){
