@@ -38,13 +38,13 @@ static void delay_cycles(volatile uint32_t count)
 
 int main(void)
 {
-    /* If you later configure clocks, update this value accordingly */
+    // If later configure clocks, update this value accordingly
     serial_init(8000000UL, 115200UL);
 
     serial_send_string("USART1 ready\r\n");
     serial_send_string("Type 4 characters in your serial terminal:\r\n");
 
-    /* --- Task a: receive raw bytes of known length --- */
+    // --- Task a: receive raw bytes of known length ---
     uint8_t rx_buf[4];
     serial_recv_bytes(rx_buf, sizeof(rx_buf));
 
@@ -52,12 +52,12 @@ int main(void)
     serial_send_bytes(rx_buf, sizeof(rx_buf));
     serial_send_string("\r\n");
 
-    /* --- Task b: debug string --- */
+    // --- Task b: debug string ---
     serial_send_string("sendString() is working\r\n");
 
-    /* --- Task c: send structured message --- */
+    // --- Task c: send structured message ---
     HeadingMessage msg;
-    msg.heading_deg_x10 = 1234;   /* 123.4 degrees */
+    msg.heading_deg_x10 = 1234;   // 123.4 degrees
     msg.button_pressed  = 1U;
     msg.sample_count    = 42U;
 
