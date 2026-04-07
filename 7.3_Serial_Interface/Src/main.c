@@ -36,36 +36,68 @@ static void delay_cycles(volatile uint32_t count)
     }
 }
 
+static void halt_forever(void)
+{
+    for (;;) {
+        /* stop here if something fails */
+    }
+}
+
 int main(void)
 {
-    // If later configure clocks, update this value accordingly
+    uint8_t rx_buf[4];
+    HeadingMessage msg;
+
+    /* If later configure clocks, update this value accordingly */
     serial_init(8000000UL, 115200UL);
 
-    serial_send_string("USART1 ready\r\n");
-    serial_send_string("Type 4 characters in your serial terminal:\r\n");
+    if (!serial_send_string("USART1 ready\r\n")) {
+        halt_forever();
+    }
 
-    // --- Task a: receive raw bytes of known length ---
-    uint8_t rx_buf[4];
-    serial_recv_bytes(rx_buf, sizeof(rx_buf));
+    if (!serial_send_string("Type 4 characters in your serial terminal:\r\n")) {
+        halt_forever();
+    }
 
-    serial_send_string("Received bytes: ");
-    serial_send_bytes(rx_buf, sizeof(rx_buf));
-    serial_send_string("\r\n");
+    /* Task a: receive raw bytes of known length */
+    if (!serial_recv_bytes(rx_buf, sizeof(rx_buf))) {
+        (void)serial_send_string("RX timeout or receive error\r\n");
+        halt_forever();
+    }
 
-    // --- Task b: debug string ---
-    serial_send_string("sendString() is working\r\n");
+    if (!serial_send_string("Received bytes: ")) {
+        halt_forever();
+    }
 
-    // --- Task c: send structured message ---
-    HeadingMessage msg;
-    msg.heading_deg_x10 = 1234;   // 123.4 degrees
+    if (!serial_send_bytes(rx_buf, sizeof(rx_buf))) {
+        halt_forever();
+    }
+
+    if (!serial_send_string("\r\n")) {
+        halt_forever();
+    }
+
+    /* Task b: debug string */
+    if (!serial_send_string("sendString() is working\r\n")) {
+        halt_forever();
+    }
+
+    /* Task c: send structured message */
+    msg.heading_deg_x10 = 1234;   /* 123.4 degrees */
     msg.button_pressed  = 1U;
     msg.sample_count    = 42U;
 
-    serial_send_string("Sending framed binary packet...\r\n");
-    (void)serial_send_msg(SERIAL_MSG_HEADING, &msg, sizeof(msg));
+    if (!serial_send_string("Sending framed binary packet...\r\n")) {
+        halt_forever();
+    }
+
+    if (!serial_send_msg(SERIAL_MSG_HEADING, &msg, sizeof(msg))) {
+        (void)serial_send_string("sendMsg failed\r\n");
+        halt_forever();
+    }
 
     for (;;) {
-        serial_send_string("Heartbeat\r\n");
+        (void)serial_send_string("Heartbeat\r\n");
         delay_cycles(800000U);
     }
 }
