@@ -30,18 +30,19 @@ typedef enum {
 
 typedef struct {
     timer_mode_t mode;
-    uint32_t     on_time_ms;
-    uint32_t     off_time_ms;
-    uint8_t      led_mask;
+    uint32_t period;
+    uint32_t PWM_period;
+    uint32_t duty_cucyle;
+    uint8_t led_mask;
 } timer_config_t;
 
-static volatile timer_config_t *active_config = 0x00; // pointer to whichever config is active
+static timer_config_t *active_config = 0x00; // pointer to whichever config is active
 
-#define CPU_FREQ_HZ     8000000UL
-#define PSC_VAL         7UL
-#define TICK_FREQ_HZ    (CPU_FREQ_HZ / (PSC_VAL + 1))  // 1,000,000 Hz → 1µs/tick
+#define CPU_FREQ_HZ 8000000UL
+#define PSC_VAL 7UL
+#define TICK_FREQ_HZ (CPU_FREQ_HZ / (PSC_VAL + 1))  // 1,000,000 Hz → 1µs/tick
 
-static volatile uint8_t  is_on_phase   = 1;
+static uint32_t pwm_curr_tick_counter = 0;
 
 //-----------------------------interrupts
 
@@ -108,18 +109,24 @@ void set_prescaler(uint32_t prescaler) {
 void timer_task(void)
 {
 	uint8_t *leds = (uint8_t *)&GPIOE->ODR + 1;
-	*leds ^= active_config->led_mask;   // always toggle
 
 	if (active_config->mode == MODE_PWM) {
-		if (is_on_phase) {
-			is_on_phase = 0;
-			set_arr(active_config->off_time_ms);
-		} else {
-			is_on_phase = 1;
-			set_arr(active_config->on_time_ms);
+		pwm_curr_tick_counter++;
+
+		if (pwm_curr_tick_counter >= active_config->PWM_period) {
+			pwm_curr_tick_counter = 0;
+			*leds = 0x00;
+		}
+		else if (pwm_curr_tick_counter <= active_config->duty_cucyle) {
+			*leds |= active_config->led_mask;
+		}
+		else {
+			*leds = 0x00;
 		}
 	}
-	// MODE_NORMAL: nothing extra needed
+	else {
+		*leds ^= active_config->led_mask;
+	}
 }
 
 //--------------------------timers
@@ -135,11 +142,10 @@ void tim2_init(timer_config_t *config, void (*callback)(void)) {
 
 	set_prescaler(7); //set prescaler to 7 so it's counting every 1us
 
-	uint32_t initial_ms = (config->mode == MODE_PWM) ? config->on_time_ms: config->off_time_ms;
-	TIM2->ARR   = ms_to_arr(initial_ms);
-	TIM2->CNT   = 0;
-	TIM2->EGR   = TIM_EGR_UG;        // latch PSC and ARR
-	TIM2->SR   &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
+	TIM2->ARR = (config->mode == MODE_PWM) ? (config->period - 1) : ms_to_arr(config->period);
+	TIM2->CNT = 0;
+	TIM2->EGR = TIM_EGR_UG;        // latch PSC and ARR
+	TIM2->SR &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
 	TIM2->DIER |= TIM_DIER_UIE;
 
 	NVIC_EnableIRQ(TIM2_IRQn);
@@ -156,24 +162,25 @@ int main(void)
 	config_LED();
 
 	// PWM mode — 1ms on, 19ms off
-	    timer_config_t pwm_cfg = {
-	        .mode        = MODE_PWM,
-	        .on_time_ms  = 1,
-	        .off_time_ms = 19,
-	        .led_mask    = 0x55
-	    };
+	timer_config_t pwm_cfg = {
+		.mode = MODE_PWM,
+		.period = 500, //0.5 ms bc 500 us
+		.PWM_period = 20 * 2, //20ms, first number is amount of ms
+		.duty_cucyle = 20 * 2, //1ms, first number is the duty cycle the pwm is on for per cycle
+		.led_mask    = 0x55
+	};
 
-	    // Normal mode — steady 500ms toggle
-	    timer_config_t normal_cfg = {
-	        .mode        = MODE_NORMAL,
-	        .off_time_ms = 500,
-	        .led_mask    = 0x55
-	    };
+	// Normal mode — steady 500ms toggle
+	timer_config_t normal_cfg = {
+		.mode = MODE_NORMAL,
+		.period = 1000UL, //1s
+		.led_mask = 0x55
+	};
 
-	    timer_config_t *configs[] = { &pwm_cfg, &normal_cfg };
-	    uint8_t active_idx = 0; //0 for pwm and 1 for normal config
+	timer_config_t *configs[] = { &pwm_cfg, &normal_cfg };
+	uint8_t active_idx = 0; //0 for pwm and 1 for normal config
 
-	    tim2_init(configs[active_idx], timer_task);   // swap to &normal_cfg to change mode
+	tim2_init(configs[active_idx], timer_task);   // swap to &normal_cfg to change mode
 
-	    while (1) {}
+	while (1) {}
 }
