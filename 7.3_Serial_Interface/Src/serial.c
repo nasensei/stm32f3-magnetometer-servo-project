@@ -30,6 +30,55 @@ static uint8_t serial_checksum(uint8_t msg_type, const uint8_t *payload, uint8_t
     return checksum;
 }
 
+static serial_rx_callback_t serial_rx_callback = NULL;
+// ISR receive state
+static volatile uint8_t serial_rx_buffer[SERIAL_MAX_PACKET];
+static volatile uint8_t serial_rx_length = 0U;
+static volatile bool serial_rx_started = false;
+static volatile bool serial_rx_packet_ready = false;
+
+// THIS HELPER function is implemented for part e
+static bool serial_validate_packet(const uint8_t *packet, uint8_t bytes_received)
+{
+    uint8_t payload_size;
+    uint8_t msg_type;
+    uint8_t received_checksum;
+    uint8_t calculated_checksum;
+
+    if (packet == NULL) {
+        return false;
+    }
+    // Minimum valid packet: [START][SIZE][TYPE][CHECKSUM][STOP], assuming payload size = 0
+    if (bytes_received < SERIAL_PACKET_OVERHEAD) {
+        return false;
+    }
+
+    if (packet[0] != SERIAL_START_BYTE) {
+        return false;
+    }
+
+    payload_size = packet[1];
+    if (payload_size > SERIAL_MAX_PAYLOAD) {
+        return false;
+    }
+    // packet length doesnt match the size field
+    if (bytes_received != (uint8_t)(payload_size + SERIAL_PACKET_OVERHEAD)) {
+        return false;
+    }
+
+    if (packet[4U + payload_size] != SERIAL_STOP_BYTE) {
+        return false;
+    }
+    // check checksum of the packet
+    msg_type = packet[2];
+    received_checksum = packet[3U + payload_size];
+    calculated_checksum = serial_checksum(msg_type, &packet[3], payload_size);
+    if (received_checksum != calculated_checksum) {
+        return false;
+    }
+
+    return true;
+}
 
 void serial_init(uint32_t peripheral_clock_hz, uint32_t baud) {
 	// enable clock
@@ -200,3 +249,110 @@ bool serial_send_msg(uint8_t msg_type, const void *payload, uint8_t payload_size
 	}
 	return true;
 }
+
+void serial_set_receive_callback(serial_rx_callback_t callback) {
+    serial_rx_callback = callback;
+}
+
+/* bool serial_receive_msg(void) {
+    uint8_t byte = 0U;
+    uint8_t payload_size = 0U;
+    uint8_t msg_type = 0U;
+    uint8_t received_checksum = 0U;
+    uint8_t calculated_checksum = 0U;
+    uint8_t bytes_received = 0U;
+    bool started = false;
+
+    while (1) {
+    	if (!serial_read_byte(&byte)) {
+    		return false;
+    	}
+
+    	// wait until the start byte is seen
+    	if (!started) {
+    		if (byte != SERIAL_START_BYTE) {
+    			continue;
+    		}
+    		started = true;
+    	}
+
+    	// prevent buffer overflow
+    	if (bytes_received >= SERIAL_MAX_PACKET) {
+    	   return false;
+    	}
+
+    	serial_rx_buffer[bytes_received++] = byte;
+
+    	// stop when terminating character is received
+    	if (byte == SERIAL_STOP_BYTE) {
+    		break;
+    	}
+    }
+
+    // check the validity of the packet
+    // min valid packet is [START][SIZE][TYPE][CHECKSUM][STOP], assuming payload = 0
+    if (bytes_received < SERIAL_PACKET_OVERHEAD) {
+    	return false;
+    }
+    if (serial_rx_buffer[0] != SERIAL_START_BYTE) {
+    	return false;
+    }
+
+    payload_size = serial_rx_buffer[1];
+    if (payload_size > SERIAL_MAX_PAYLOAD) {
+       return false;
+    }
+    // packet length must match the size field
+    if (bytes_received != (uint8_t)(payload_size + SERIAL_PACKET_OVERHEAD)) {
+       return false;
+    }
+    // check checksum of the received packet
+    msg_type = serial_rx_buffer[2];
+    received_checksum = serial_rx_buffer[3U + payload_size];
+    calculated_checksum = serial_checksum(msg_type, &serial_rx_buffer[3], payload_size);
+    if (received_checksum != calculated_checksum) {
+       return false;
+    }
+    // call back
+    serial_rx_length = bytes_received;
+
+    if (serial_rx_callback != NULL) {
+       serial_rx_callback(serial_rx_buffer, serial_rx_length);
+    }
+    return true;
+} */
+
+void serial_enable_rx_interrupt(void) {
+	volatile uint8_t dummy;
+
+	// reset the receive state
+	serial_rx_starter = false;
+	serial_rx_length = 0U;
+	serial_rx_packet_ready = false;
+
+	// Clear the old byte that is sitting in USART receive register
+	// ISR = interrupt and status register
+	// RXNE = receive data is not empty mask
+	while ((USART1->ISR & USART_ISR_RXNE) != 0U) {
+		// RDR gets the receive byte
+		// 0xFF keeps the lowest 8 bits
+	    dummy = (uint8_t)(USART1->RDR & 0xFFU);
+	    // to avoid the unused variable warning
+	    (void)dummy;
+	}
+
+	//NVIC helps manage the interrupt
+	NVIC_ClearPendingIRQ(USART1_IRQn); // clear any interrupt request in NVIC
+	NVIC_EnableIRQ(USART1_IRQn); // enable USART1 interrupt line in the NVIC
+
+	// Enable RX interrupt generation inside USART
+	// RXNE = Receive data register not empty
+	// IE = interrupt enable
+	USART1->CR1 |= USART_CR1_RXNEIE;
+}
+
+void serial_disable_rx_interrupt(void) {
+	USART1->CR1 &= ~USART_CR1_RXNEIE;
+	NVIC_DisableIRQ(USART1_IRQn);
+}
+
