@@ -43,10 +43,34 @@ static void halt_forever(void)
     }
 }
 
+static void on_serial_msg_received(const uint8_t *msg, uint8_t bytes_received)
+{
+    uint8_t payload_size = msg[1];
+    uint8_t msg_type = msg[2];
+
+    (void)bytes_received;
+    (void)payload_size;
+
+    switch (msg_type) {
+    case SERIAL_MSG_HEADING:
+        (void)serial_send_string("Received heading packet\r\n");
+        break;
+
+    case SERIAL_MSG_BUTTON:
+        (void)serial_send_string("Received button packet\r\n");
+        break;
+
+    default:
+        (void)serial_send_string("Received packet\r\n");
+        break;
+    }
+}
+
 int main(void)
 {
     uint8_t rx_buf[4];
     HeadingMessage msg;
+    serial_set_receive_callback(on_serial_msg_received);
 
     /* If later configure clocks, update this value accordingly */
     serial_init(8000000UL, 115200UL);
@@ -96,7 +120,15 @@ int main(void)
         halt_forever();
     }
 
+    /* Task e: switch RX to interrupt mode */
+    erial_enable_rx_interrupt();
+
+    if (!serial_send_string("RX interrupt mode enabled\r\n")) {
+       halt_forever();
+    }
+
     for (;;) {
+        serial_process_rx();   /* validate + callback if a full packet arrived */
         (void)serial_send_string("Heartbeat\r\n");
         delay_cycles(800000U);
     }
