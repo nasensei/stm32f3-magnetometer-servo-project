@@ -17,13 +17,170 @@
  */
 
 #include <stdint.h>
+#include "stm32f303xc.h"
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+typedef enum {
+    MODE_PWM,
+    MODE_NORMAL
+} timer_mode_t;
+
+typedef struct {
+    timer_mode_t mode;
+    uint32_t period;
+    uint32_t PWM_period;
+    uint32_t duty_cucyle;
+    uint8_t led_mask;
+} timer_config_t;
+
+static timer_config_t *active_config = 0x00; // pointer to whichever config is active
+
+#define CPU_FREQ_HZ 8000000UL
+#define PSC_VAL 7UL
+#define TICK_FREQ_HZ (CPU_FREQ_HZ / (PSC_VAL + 1))  // 1,000,000 Hz → 1µs/tick
+
+static uint32_t pwm_curr_tick_counter = 0;
+
+//-----------------------------interrupts
+
+static void (*timer_callback)(void) = 0x00; //later this will adopt the address of timer_task //static to make it private
+
+void TIM2_IRQHandler(void)
+{
+    if (TIM2->SR & TIM_SR_UIF) {
+        TIM2->SR &= ~TIM_SR_UIF;   // clear interrupt flag
+
+        if (timer_callback != 0) {
+            timer_callback();
+        }
+    }
+}
+
+//-----------------------------tim2 config
+
+void enable_clock_tim2(void) {
+	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+}
+
+void enable_clock_LED(void) {
+	RCC->AHBENR |= RCC_AHBENR_GPIOEEN;
+}
+
+//----------------------------led config
+
+void config_LED(void) {
+	uint16_t *led_output_registers = ((uint16_t *)&(GPIOE->MODER)) + 1;
+	*led_output_registers = 0x5555;
+}
+
+//----------------------------ARR controller
+
+static uint32_t ms_to_arr(uint32_t ms)
+{
+    return (TICK_FREQ_HZ / 1000UL) * ms - 1UL;
+}
+
+static void set_arr(uint32_t ms)
+{
+    TIM2->ARR = ms_to_arr(ms);
+    TIM2->EGR = TIM_EGR_UG;   // latch new ARR, clears UIF
+    TIM2->SR &= ~TIM_SR_UIF;  // clear the UIF set by EGR_UG
+}
+
+//-------------------------set prescalar
+
+void set_prescaler(uint32_t prescaler) {
+	//prescaler: 8MHz (input clock)/(7 (PSC) + 1) = 1MHz (1 tick per microecond)
+	if (TIM2->CR1 & TIM_CR1_CEN) {
+		TIM2->CR1 &= ~TIM_CR1_CEN;
+		TIM2->PSC = prescaler;
+		TIM2->CR1 |= TIM_CR1_CEN;
+	}
+	else {
+		TIM2->PSC = prescaler;
+	}
+}
+
+//------------------------call back functions
+
+void timer_task(void)
+{
+	uint8_t *leds = (uint8_t *)&GPIOE->ODR + 1;
+
+	if (active_config->mode == MODE_PWM) {
+		pwm_curr_tick_counter++;
+
+		if (pwm_curr_tick_counter >= active_config->PWM_period) {
+			pwm_curr_tick_counter = 0;
+			*leds = 0x00;
+		}
+		else if (pwm_curr_tick_counter <= active_config->duty_cucyle) {
+			*leds |= active_config->led_mask;
+		}
+		else {
+			*leds = 0x00;
+		}
+	}
+	else {
+		*leds ^= active_config->led_mask;
+	}
+}
+
+//--------------------------timers
+
+void tim2_init(timer_config_t *config, void (*callback)(void)) {
+	active_config = config;
+
+	enable_clock_tim2();
+
+	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
+
+	TIM2->CR1 &= ~TIM_CR1_CEN;
+
+	set_prescaler(7); //set prescaler to 7 so it's counting every 1us
+
+	TIM2->ARR = (config->mode == MODE_PWM) ? (config->period - 1) : ms_to_arr(config->period);
+	TIM2->CNT = 0;
+	TIM2->EGR = TIM_EGR_UG;        // latch PSC and ARR
+	TIM2->SR &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
+	TIM2->DIER |= TIM_DIER_UIE;
+
+	NVIC_EnableIRQ(TIM2_IRQn);
+	TIM2->CR1  |= TIM_CR1_CEN;
+}
+
+//-------------------main
+
 int main(void)
 {
     /* Loop forever */
-	for(;;);
+
+	enable_clock_LED();
+	config_LED();
+
+	// PWM mode — 1ms on, 19ms off
+	timer_config_t pwm_cfg = {
+		.mode = MODE_PWM,
+		.period = 500, //0.5 ms bc 500 us
+		.PWM_period = 20 * 2, //20ms, first number is amount of ms
+		.duty_cucyle = 20 * 2, //1ms, first number is the duty cycle the pwm is on for per cycle
+		.led_mask    = 0x55
+	};
+
+	// Normal mode — steady 500ms toggle
+	timer_config_t normal_cfg = {
+		.mode = MODE_NORMAL,
+		.period = 1000UL, //1s
+		.led_mask = 0x55
+	};
+
+	timer_config_t *configs[] = { &pwm_cfg, &normal_cfg };
+	uint8_t active_idx = 0; //0 for pwm and 1 for normal config
+
+	tim2_init(configs[active_idx], timer_task);   // swap to &normal_cfg to change mode
+
+	while (1) {}
 }
