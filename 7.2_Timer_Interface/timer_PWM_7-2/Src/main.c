@@ -23,6 +23,28 @@
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+typedef enum {
+    MODE_PWM,
+    MODE_NORMAL
+} timer_mode_t;
+
+typedef struct {
+    timer_mode_t mode;
+    uint32_t     on_time_ms;
+    uint32_t     off_time_ms;
+    uint8_t      led_mask;
+} timer_config_t;
+
+static volatile timer_config_t *active_config = 0x00; // pointer to whichever config is active
+
+#define CPU_FREQ_HZ     8000000UL
+#define PSC_VAL         7UL
+#define TICK_FREQ_HZ    (CPU_FREQ_HZ / (PSC_VAL + 1))  // 1,000,000 Hz → 1µs/tick
+
+static volatile uint8_t  is_on_phase   = 1;
+
+//-----------------------------interrupts
+
 static void (*timer_callback)(void) = 0x00; //later this will adopt the address of timer_task //static to make it private
 
 void TIM2_IRQHandler(void)
@@ -36,6 +58,8 @@ void TIM2_IRQHandler(void)
     }
 }
 
+//-----------------------------tim2 config
+
 void enable_clock_tim2(void) {
 	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
 }
@@ -44,81 +68,85 @@ void enable_clock_LED(void) {
 	RCC->AHBENR |= RCC_AHBENR_GPIOEEN;
 }
 
+//----------------------------led config
+
 void config_LED(void) {
 	uint16_t *led_output_registers = ((uint16_t *)&(GPIOE->MODER)) + 1;
 	*led_output_registers = 0x5555;
 }
+
+//----------------------------ARR controller
+
+static uint32_t ms_to_arr(uint32_t ms)
+{
+    return (TICK_FREQ_HZ / 1000UL) * ms - 1UL;
+}
+
+static void set_arr(uint32_t ms)
+{
+    TIM2->ARR = ms_to_arr(ms);
+    TIM2->EGR = TIM_EGR_UG;   // latch new ARR, clears UIF
+    TIM2->SR &= ~TIM_SR_UIF;  // clear the UIF set by EGR_UG
+}
+
+//-------------------------set prescalar
 
 void set_prescaler(uint32_t prescaler) {
 	//prescaler: 8MHz (input clock)/(7 (PSC) + 1) = 1MHz (1 tick per microecond)
 	if (TIM2->CR1 & TIM_CR1_CEN) {
 		TIM2->CR1 &= ~TIM_CR1_CEN;
 		TIM2->PSC = prescaler;
-		TIM2->CR1 = TIM_CR1_CEN;
+		TIM2->CR1 |= TIM_CR1_CEN;
 	}
 	else {
 		TIM2->PSC = prescaler;
 	}
 }
 
-void set_autoReloadValue(uint32_t arr) {
-	TIM2->ARR = arr;
-
-	TIM2->EGR = TIM_EGR_UG; //update timer ARR
-}
+//------------------------call back functions
 
 void timer_task(void)
 {
-    // code to run every timer period
-	uint8_t led_mask_pattern = 0b01010101;
-	uint8_t *led_output_register = ((uint8_t*)&(GPIOE->ODR)) + 1;
+	uint8_t *leds = (uint8_t *)&GPIOE->ODR + 1;
+	*leds ^= active_config->led_mask;   // always toggle
 
-	*led_output_register ^= led_mask_pattern;
-
-	//change ARR depending on the on time and off time
+	if (active_config->mode == MODE_PWM) {
+		if (is_on_phase) {
+			is_on_phase = 0;
+			set_arr(active_config->off_time_ms);
+		} else {
+			is_on_phase = 1;
+			set_arr(active_config->on_time_ms);
+		}
+	}
+	// MODE_NORMAL: nothing extra needed
 }
 
-void calc_ms_innit_PSC_ARR(uint32_t amount_ms) {
-	PSC_val  = 7;//make it us
+//--------------------------timers
 
-	set_prescaler(PSC_val);
+void tim2_init(timer_config_t *config, void (*callback)(void)) {
+	active_config = config;
 
-	ARR_val = amount_ms/1000;
-
-	set_autoReloadValue(ARR_val);
-
-	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
-}
-
-void restart_enable_tim2(void) {
-	TIM2->CR1 &= ~TIM_CR1_CEN;
-
-	TIM2->CNT = 0; //set timer to 0
-	TIM2->EGR = TIM_EGR_UG; //update timer ARR and PSC
-
-	TIM2->SR &= ~TIM_SR_UIF;//clear flag
-
-	//use interrupt
-	TIM2->DIER |= TIM_DIER_UIE; //turn on UIF for interrupt flag when overflow
-
-	TIM2->CR1 |= TIM_CR1_CEN; //start timer
-}
-
-void tim2_init(uint32_t amount_ms, void (*callback)(void), int change_psc_arr) {
 	enable_clock_tim2();
 
 	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
 
 	TIM2->CR1 &= ~TIM_CR1_CEN;
 
-	if (change_psc_arr) {
-		calc_ms_innit_PSC_ARR(amount_ms);
-	}
+	set_prescaler(7); //set prescaler to 7 so it's counting every 1us
+
+	uint32_t initial_ms = (config->mode == MODE_PWM) ? config->on_time_ms: config->off_time_ms;
+	TIM2->ARR   = ms_to_arr(initial_ms);
+	TIM2->CNT   = 0;
+	TIM2->EGR   = TIM_EGR_UG;        // latch PSC and ARR
+	TIM2->SR   &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
+	TIM2->DIER |= TIM_DIER_UIE;
 
 	NVIC_EnableIRQ(TIM2_IRQn);
-
-	restart_enable_tim2();
+	TIM2->CR1  |= TIM_CR1_CEN;
 }
+
+//-------------------main
 
 int main(void)
 {
@@ -127,9 +155,25 @@ int main(void)
 	enable_clock_LED();
 	config_LED();
 
-	tim2_init(1000, timer_task, 1);
+	// PWM mode — 1ms on, 19ms off
+	    timer_config_t pwm_cfg = {
+	        .mode        = MODE_PWM,
+	        .on_time_ms  = 1,
+	        .off_time_ms = 19,
+	        .led_mask    = 0x55
+	    };
 
-	while (1) {
+	    // Normal mode — steady 500ms toggle
+	    timer_config_t normal_cfg = {
+	        .mode        = MODE_NORMAL,
+	        .off_time_ms = 500,
+	        .led_mask    = 0x55
+	    };
 
-	}
+	    timer_config_t *configs[] = { &pwm_cfg, &normal_cfg };
+	    uint8_t active_idx = 0; //0 for pwm and 1 for normal config
+
+	    tim2_init(configs[active_idx], timer_task);   // swap to &normal_cfg to change mode
+
+	    while (1) {}
 }
