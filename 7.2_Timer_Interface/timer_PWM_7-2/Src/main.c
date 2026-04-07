@@ -25,7 +25,7 @@
 
 typedef enum {
     MODE_PWM,
-    MODE_NORMAL
+    MODE_NORMAL,
 } timer_mode_t;
 
 typedef struct {
@@ -44,9 +44,12 @@ static timer_config_t *active_config = 0x00; // pointer to whichever config is a
 
 static uint32_t pwm_curr_tick_counter = 0;
 
+static uint32_t oneshot_delay = 1000UL; //default this to 1 second
+
 //-----------------------------interrupts
 
 static void (*timer_callback)(void) = 0x00; //later this will adopt the address of timer_task //static to make it private
+static void (*oneshot_callback)(void) = 0x00;
 
 void TIM2_IRQHandler(void)
 {
@@ -55,6 +58,15 @@ void TIM2_IRQHandler(void)
 
         if (timer_callback != 0) {
             timer_callback();
+        }
+        if (oneshot_callback != 0) {
+        	if (oneshot_delay > 0) {
+        		oneshot_delay--;
+        	}
+        	else {
+        		oneshot_callback();
+        		oneshot_callback = 0x00;
+        	}
         }
     }
 }
@@ -129,27 +141,58 @@ void timer_task(void)
 	}
 }
 
+void one_shot_task(void) {
+	GPIOE->ODR ^= (0x55 <<8);
+}
+
 //--------------------------timers
 
 void tim2_init(timer_config_t *config, void (*callback)(void)) {
-	active_config = config;
+	if (config->mode != 0) {
+		active_config = config;
 
-	enable_clock_tim2();
+		enable_clock_tim2();
 
-	timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
+		timer_callback = callback; //send the addy of callback funciton(timer_task) to timer_callback
 
-	TIM2->CR1 &= ~TIM_CR1_CEN;
+		TIM2->CR1 &= ~TIM_CR1_CEN;
 
-	set_prescaler(7); //set prescaler to 7 so it's counting every 1us
+		set_prescaler(7); //set prescaler to 7 so it's counting every 1us
 
-	TIM2->ARR = (config->mode == MODE_PWM) ? (config->period - 1) : ms_to_arr(config->period);
-	TIM2->CNT = 0;
-	TIM2->EGR = TIM_EGR_UG;        // latch PSC and ARR
-	TIM2->SR &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
-	TIM2->DIER |= TIM_DIER_UIE;
+		TIM2->ARR = (config->mode == MODE_PWM) ? (config->period - 1) : ms_to_arr(config->period);
+		TIM2->CNT = 0;
+		TIM2->EGR = TIM_EGR_UG;        // latch PSC and ARR
+		TIM2->SR &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
+		TIM2->DIER |= TIM_DIER_UIE;
 
-	NVIC_EnableIRQ(TIM2_IRQn);
-	TIM2->CR1  |= TIM_CR1_CEN;
+		NVIC_EnableIRQ(TIM2_IRQn);
+		TIM2->CR1  |= TIM_CR1_CEN;
+	}
+}
+
+//-------------------oneshot functions
+
+void timer_oneshot(uint32_t delay_ms, void (*callback)(void)) {
+	if (delay_ms != 0) {
+		enable_clock_tim2();
+
+		oneshot_callback = callback;
+
+		oneshot_delay = delay_ms;
+
+		TIM2->CR1 &= ~TIM_CR1_CEN;
+
+		set_prescaler(7);
+
+		TIM2->ARR = 1000-1; //to 1ms
+		TIM2->CNT = 0;
+		TIM2->EGR = TIM_EGR_UG;        // latch PSC and ARR
+		TIM2->SR &= ~TIM_SR_UIF;       // clear flag EGR_UG just set
+		TIM2->DIER |= TIM_DIER_UIE;
+
+		NVIC_EnableIRQ(TIM2_IRQn);
+		TIM2->CR1  |= TIM_CR1_CEN;
+	}
 }
 
 //-------------------main
@@ -177,10 +220,12 @@ int main(void)
 		.led_mask = 0x55
 	};
 
-	timer_config_t *configs[] = { &pwm_cfg, &normal_cfg };
-	uint8_t active_idx = 0; //0 for pwm and 1 for normal config
+	timer_config_t *configs[] = {&pwm_cfg, &normal_cfg, 0x00};
+	uint8_t active_idx = 2; //0 for pwm and 1 for normal config and 2 for skip this func
 
 	tim2_init(configs[active_idx], timer_task);   // swap to &normal_cfg to change mode
+
+	timer_oneshot((active_idx == 2)? 3000: 0, one_shot_task); //if delay_ms is set to 0, skip this func completely
 
 	while (1) {}
 }
