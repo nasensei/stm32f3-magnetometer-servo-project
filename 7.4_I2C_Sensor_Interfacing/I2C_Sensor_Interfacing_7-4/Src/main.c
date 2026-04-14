@@ -8,37 +8,47 @@
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+// magnetometer in use is LMS303AGR
 #define mag_add 0x1E			//address of magnetometer
 #define mag_reg_start_add 0x68	//register where raw data starts
 #define mag_data_bytes 6		//number of bytes to read, 2 each for x, y, z raws
+#define ALPHA 0.1f // low-pass filter sensitivity?
 
-
+// Struct with all magnetometer data
 typedef struct {
+	// Raw values
     int16_t raw_x;
     int16_t raw_y;
     int16_t raw_z;
 
-    float heading;
+    // Filtered values
+    float fx;
+    float fy;
+    float fz;
 
+    float heading;
     uint32_t timestamp;
 } magnetometer_data;
 
 void enable_LED_clocks() {
-    RCC->AHBENR |= RCC_AHBENR_GPIOEEN; // GPIOE clock
+    RCC->AHBENR |= RCC_AHBENR_GPIOEEN;
 }
 
 void configure_LEDs() {
-    // PE8–PE15 as outputs
+    // configure PE8–PE15 to output mode
     for (int i = 8; i <= 15; i++) {
         GPIOE->MODER &= ~(3 << (i * 2));
-        GPIOE->MODER |=  (1 << (i * 2)); // output mode
+        GPIOE->MODER |=  (1 << (i * 2));
     }
 }
 void clear_LEDs() {
+	// just in case
     for (int i = 8; i <= 15; i++) {
         GPIOE->ODR &= ~(1 << i);
     }
 }
+
+// Display current heading on the LED ring for visualisation
 void display_heading_led(float heading) {
 
     clear_LEDs();
@@ -64,6 +74,8 @@ void display_heading_led(float heading) {
 
     GPIOE->ODR |= (1 << (8 + led_index));
 }
+
+// For LED ring use
 void delay() {
     for (volatile int i = 0; i < 200000; i++);
 }
@@ -95,7 +107,7 @@ void configure_I2C() {
 	GPIOB->AFR[0] &= ~((0xF << 24) | (0xF << 28));
 	GPIOB->AFR[0] |=  ((4 << 24) | (4 << 28));
 
-	GPIOB->OSPEEDR |= (3 << 12) | (3 << 14); // High speed mode
+	GPIOB->OSPEEDR |= (3 << 12) | (3 << 14); // High speed mode for TIMINGR (see below)
 
 
 	// I2C CONFIG
@@ -139,6 +151,15 @@ void I2C_get_data(uint8_t address, uint8_t reg2read, uint8_t *data_buff, uint8_t
     I2C1->CR2 |= I2C_CR2_STOP; // stop I2C
 }
 
+// Stop header bouncing around, stores in struct under f* values
+void low_pass_filter(magnetometer_data *mag)
+{
+    mag->fx = ALPHA * mag->raw_x + (1.0f - ALPHA) * mag->fx;
+    mag->fy = ALPHA * mag->raw_y + (1.0f - ALPHA) * mag->fy;
+    mag->fz = ALPHA * mag->raw_z + (1.0f - ALPHA) * mag->fz;
+}
+
+
 /* read_magnetometer uses I2C to store magnetometer data into a struct
  * *raw_mag -> pointer to struct that will have data put into it
  */
@@ -154,13 +175,14 @@ void read_magnetometer(magnetometer_data *raw_mag) {
     raw_mag->raw_y = (buffer[4] << 8) | buffer[5];
 }
 
-
+// Converts raw x/y magnetometer values into 0-360 degree heading
 void compute_heading(magnetometer_data *raw_mag) {
-    raw_mag->heading = atan2((float)raw_mag->raw_y, (float)raw_mag->raw_x) * (180.0f / 3.14159f);
+    raw_mag->heading = atan2f(raw_mag->fy, raw_mag->fx) * (180.0f / 3.14159f);
 
     if (raw_mag->heading < 0)
         raw_mag->heading += 360.0f;
 }
+
 void I2C_write(uint8_t address, uint8_t reg, uint8_t *data, uint8_t nbytes) {
 
     // Configure transfer: address + number of bytes (reg + data)
@@ -184,19 +206,17 @@ void I2C_write(uint8_t address, uint8_t reg, uint8_t *data, uint8_t nbytes) {
     I2C1->CR2 |= I2C_CR2_STOP;
 }
 
+// configure magnetometer to actually work
 void init_magnetometer() {
     uint8_t data;
 
-    // CFG_REG_A_M (0x60): continuous mode + ODR
-    data = 0x10;   // or 0x00 for default 10 Hz
+    data = 0x8C; // continuous mode
     I2C_write(0x1E, 0x60, &data, 1);
 
-    // CFG_REG_B_M (0x61): gain default
-    data = 0x00;
+    data = 0x01; //sensitivity for use on earth
     I2C_write(0x1E, 0x61, &data, 1);
 
-    // CFG_REG_C_M (0x62): enable BDU (recommended)
-    data = 0x10;
+    data = 0x00; // ???
     I2C_write(0x1E, 0x62, &data, 1);
 }
 int main(void)
@@ -213,6 +233,9 @@ int main(void)
 
     while (1) {
         read_magnetometer(&mag);
+
+        low_pass_filter(&mag);
+
         compute_heading(&mag);
 
         display_heading_led(mag.heading);
