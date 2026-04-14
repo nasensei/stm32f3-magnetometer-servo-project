@@ -146,7 +146,7 @@ void read_magnetometer(magnetometer_data *raw_mag) {
 
     uint8_t buffer[mag_data_bytes]; // make space for data
 
-    I2C_get_data(mag_add, mag_reg_start_add | 0x80, buffer, mag_data_bytes); //get and put data into buffer
+    I2C_get_data(mag_add, mag_reg_start_add, buffer, mag_data_bytes); //get and put data into buffer
 
     // correctly store data into struct
     raw_mag->raw_x = (buffer[0] << 8) | buffer[1];
@@ -187,17 +187,17 @@ void I2C_write(uint8_t address, uint8_t reg, uint8_t *data, uint8_t nbytes) {
 void init_magnetometer() {
     uint8_t data;
 
-    // CRA_REG_M (0x00): 15 Hz output rate
-    data = 0x14;
-    I2C_write(mag_add, 0x00, &data, 1);
+    // CFG_REG_A_M (0x60): continuous mode + ODR
+    data = 0x10;   // or 0x00 for default 10 Hz
+    I2C_write(0x1E, 0x60, &data, 1);
 
-    // CRB_REG_M (0x01): gain
-    data = 0x20;
-    I2C_write(mag_add, 0x01, &data, 1);
-
-    // MR_REG_M (0x02): continuous-conversion mode
+    // CFG_REG_B_M (0x61): gain default
     data = 0x00;
-    I2C_write(mag_add, 0x02, &data, 1);
+    I2C_write(0x1E, 0x61, &data, 1);
+
+    // CFG_REG_C_M (0x62): enable BDU (recommended)
+    data = 0x10;
+    I2C_write(0x1E, 0x62, &data, 1);
 }
 int main(void)
 {
