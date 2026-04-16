@@ -10,6 +10,7 @@
 #define MAG_REG_START 0x68	//register where raw xyz data starts
 #define MAG_BYTES 6		//number of bytes to read, 2 each for x, y, z raws
 
+extern volatile uint32_t system_time_ms;
 
 // configure magnetometer to actually work
 void init_magnetometer() {
@@ -39,6 +40,8 @@ void read_magnetometer(magnetometer_data *raw_mag) {
     raw_mag->raw_x = (buffer[0] << 8) | buffer[1];
     raw_mag->raw_z = (buffer[2] << 8) | buffer[3];
     raw_mag->raw_y = (buffer[4] << 8) | buffer[5];
+
+    raw_mag->timestamp = system_time_ms;
 }
 
 
