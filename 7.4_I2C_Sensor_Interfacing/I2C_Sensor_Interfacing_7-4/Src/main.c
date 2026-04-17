@@ -6,7 +6,7 @@
 #include "leds.h"
 #include "stm32f303xc.h"
 #include "serial.h"
-#include "system_stm32f3xx.h"
+
 
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
@@ -19,7 +19,7 @@ uint32_t SystemCoreClock = 8000000; //jank workaround for jank directory stuff
 volatile uint32_t system_time_ms = 0;
 
 void SysTick_Handler(void) {
-    system_time_ms++;\
+    system_time_ms++;
 
 }
 
@@ -38,37 +38,53 @@ void init_protocol(void) {
 
 int main(void)
 {
-	SCB->CPACR |= (0xF << 20); // enable FPU
-	init_protocol(); //enable/configure everything else
+    SCB->CPACR |= (0xF << 20);
+    init_protocol();
 
-    // Create struct to pass around
     magnetometer_data mag = {0};
+    int16_t min_x = 32767, min_y = 32767, min_z = 32767;
+    int16_t max_x = -32768, max_y = -32768, max_z = -32768;
 
+    float offset_x = 0.0f, offset_y = 0.0f, offset_z = 0.0f;
 
-    // Compass heading update loop
+    if (!mag_who_am_i_ok()) {
+        serial_send_string(&serial_console, "MAG WHO_AM_I FAIL\r\n");
+        while (1) { }
+    }
+
+    /* replace these with your measured offsets */
+    set_hard_iron_offsets(&mag, 0.0f, 0.0f, 0.0f);
+
     while (1) {
-    	// Get data from IMU and store into struct
         read_magnetometer(&mag);
+        if (mag.raw_x < min_x) min_x = mag.raw_x;
+        if (mag.raw_y < min_y) min_y = mag.raw_y;
+        if (mag.raw_z < min_z) min_z = mag.raw_z;
 
-        // Filter it, store in struct
+        if (mag.raw_x > max_x) max_x = mag.raw_x;
+        if (mag.raw_y > max_y) max_y = mag.raw_y;
+        if (mag.raw_z > max_z) max_z = mag.raw_z;
+
+        offset_x = (max_x + min_x) * 0.5f;
+        offset_y = (max_y + min_y) * 0.5f;
+        offset_z = (max_z + min_z) * 0.5f;
+
+        set_hard_iron_offsets(&mag, offset_x, offset_y, offset_z);
+
+        apply_hard_iron_calibration(&mag);
         low_pass_filter(&mag);
-
-        // Compute heading, store in struct
         compute_heading(&mag);
 
-        char data_2_print[100];
-        snprintf(data_2_print, sizeof(data_2_print), "X: %.2f Y: %.2f Z: %.2f Heading: %.2f deg\r\n", mag.fx, mag.fy, mag.fz, mag.heading);
+        char data_2_print[120];
+        snprintf(data_2_print, sizeof(data_2_print),
+                 "raw=(%d,%d,%d) corr=(%.1f,%.1f,%.1f) head=%.1f\r\n",
+                 mag.raw_x, mag.raw_y, mag.raw_z,
+                 mag.fx, mag.fy, mag.fz,
+                 mag.heading);
 
         serial_send_string(&serial_console, data_2_print);
-        for (volatile int i = 0; i < 10000; i++);
 
-        // Display on LED ring
         display_heading_led(mag.heading);
         delay();
     }
-
 }
-
-
-
-

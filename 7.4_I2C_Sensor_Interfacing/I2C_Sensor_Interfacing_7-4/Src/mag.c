@@ -2,64 +2,125 @@
 #include "stm32f303xc.h"
 #include "I2C.h"
 #include <math.h>
+#include <stdint.h>
 
-
-
-// magnetometer in use is LMS303AGR
-#define MAG_ADD 0x1E			//address of magnetometer
-#define MAG_REG_START 0x68	//register where raw xyz data starts
-#define MAG_BYTES 6		//number of bytes to read, 2 each for x, y, z raws
+#define MAG_ADD            0x1E
+#define MAG_WHO_AM_I_REG   0x4F
+#define MAG_WHO_AM_I_VAL   0x40
+#define MAG_STATUS_REG     0x67
+#define MAG_OUT_START      0x68
 
 extern volatile uint32_t system_time_ms;
 
-// configure magnetometer to actually work
-void init_magnetometer() {
-    uint8_t data;
-
-    data = 0x8C; // continuous mode
-    I2C_write(0x1E, 0x60, &data, 1);
-
-    data = 0x01; //sensitivity for use on earth
-    I2C_write(0x1E, 0x61, &data, 1);
-
-    data = 0x00; // ???
-    I2C_write(0x1E, 0x62, &data, 1);
+static uint8_t mag_read_reg(uint8_t reg)
+{
+    uint8_t v = 0;
+    I2C_get_data(MAG_ADD, reg, &v, 1);
+    return v;
 }
 
-
-/* read_magnetometer uses I2C to store magnetometer data into a struct
- * *raw_mag -> pointer to struct that will have data put into it
- */
-void read_magnetometer(magnetometer_data *raw_mag) {
-
-    uint8_t buffer[MAG_BYTES]; // make space for data
-
-    I2C_get_data(MAG_ADD, MAG_REG_START, buffer, MAG_BYTES); //get and put data into buffer
-
-    // correctly store data into struct
-    raw_mag->raw_x = (buffer[0] << 8) | buffer[1];
-    raw_mag->raw_z = (buffer[2] << 8) | buffer[3];
-    raw_mag->raw_y = (buffer[4] << 8) | buffer[5];
-
-    raw_mag->timestamp = system_time_ms;
+static void mag_write_reg(uint8_t reg, uint8_t value)
+{
+    I2C_write(MAG_ADD, reg, &value, 1);
 }
 
-
-// Converts raw x/y magnetometer values into 0-360 degree heading
-void compute_heading(magnetometer_data *raw_mag) {
-    raw_mag->heading = atan2f(raw_mag->fy, raw_mag->fx) * (180.0f / 3.14159f);
-
-    if (raw_mag->heading < 0)
-        raw_mag->heading += 360.0f;
+static int mag_data_ready(void)
+{
+    uint8_t status = mag_read_reg(MAG_STATUS_REG);
+    return ((status & 0x08U) != 0U);   // ZYXDA bit
 }
 
+int mag_who_am_i_ok(void)
+{
+    return (mag_read_reg(MAG_WHO_AM_I_REG) == MAG_WHO_AM_I_VAL);
+}
 
-// Stop header bouncing around, stores in struct under f* values
+void init_magnetometer(void)
+{
+    /*
+     * CFG_REG_A_M (0x60)
+     * bit7 COMP_TEMP_EN = 1
+     * bit[3:2] ODR = 01 -> 20 Hz
+     * bit[1:0] MD = 00 -> continuous mode
+     *
+     * 0x84 = 1000 0100
+     */
+    mag_write_reg(0x60, 0x84);
+
+    /*
+     * CFG_REG_B_M (0x61)
+     * LPF = 1
+     */
+    mag_write_reg(0x61, 0x01);
+
+    /*
+     * CFG_REG_C_M (0x62)
+     * BDU = 1
+     */
+    mag_write_reg(0x62, 0x10);
+}
+
+void set_hard_iron_offsets(magnetometer_data *mag, float ox, float oy, float oz)
+{
+    mag->offset_x = ox;
+    mag->offset_y = oy;
+    mag->offset_z = oz;
+}
+
+void read_magnetometer(magnetometer_data *mag)
+{
+    uint8_t buffer[6];
+
+    while (!mag_data_ready()) {
+        /* wait for fresh XYZ sample */
+    }
+
+    I2C_get_data(MAG_ADD, MAG_OUT_START | 0x80, buffer, 6);
+
+    mag->raw_x = (int16_t)((buffer[1] << 8) | buffer[0]);
+    mag->raw_y = (int16_t)((buffer[3] << 8) | buffer[2]);
+    mag->raw_z = (int16_t)((buffer[5] << 8) | buffer[4]);
+
+    mag->timestamp = system_time_ms;
+}
+
+void apply_hard_iron_calibration(magnetometer_data *mag)
+{
+    mag->mx = (float)mag->raw_x - mag->offset_x;
+    mag->my = (float)mag->raw_y - mag->offset_y;
+    mag->mz = (float)mag->raw_z - mag->offset_z;
+}
+
 void low_pass_filter(magnetometer_data *mag)
 {
-    mag->fx = ALPHA * mag->raw_x + (1.0f - ALPHA) * mag->fx;
-    mag->fy = ALPHA * mag->raw_y + (1.0f - ALPHA) * mag->fy;
-    mag->fz = ALPHA * mag->raw_z + (1.0f - ALPHA) * mag->fz;
+    static uint8_t first = 1U;
+
+    if (first) {
+        mag->fx = mag->mx;
+        mag->fy = mag->my;
+        mag->fz = mag->mz;
+        first = 0U;
+        return;
+    }
+
+    mag->fx = ALPHA * mag->mx + (1.0f - ALPHA) * mag->fx;
+    mag->fy = ALPHA * mag->my + (1.0f - ALPHA) * mag->fy;
+    mag->fz = ALPHA * mag->mz + (1.0f - ALPHA) * mag->fz;
 }
 
+void compute_heading(magnetometer_data *mag)
+{
+    /*
+     * Start with this mapping.
+     * If headings are mirrored / rotated, swap signs as described below.
+     */
+    float hx = mag->fx;
+    float hy = -mag->fy;
+    float heading = atan2f(hy, hx) * (180.0f / 3.14159265f);
 
+    if (heading < 0.0f) {
+        heading += 360.0f;
+    }
+
+    mag->heading = heading;
+}
