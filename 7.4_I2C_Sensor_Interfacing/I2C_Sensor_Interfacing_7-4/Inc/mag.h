@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define ALPHA 0.1f // low-pass filter sens
+#define ALPHA 0.05f // low-pass filter sens
 
 typedef struct {
 	// Raw values

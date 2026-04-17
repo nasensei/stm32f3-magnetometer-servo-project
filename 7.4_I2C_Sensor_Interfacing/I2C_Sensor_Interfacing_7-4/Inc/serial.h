@@ -73,7 +73,7 @@ bool serial_send_msg(serial_port_t *port, uint8_t msg_type, const void *payload,
 
 // task e/f: interrupt-driven receive/transmit
 void serial_set_receive_callback(serial_port_t *port, serial_rx_callback_t callback);
-void serial_enable_rx_interrupt(serial_port_t *port);
+bool serial_enable_rx_interrupt(serial_port_t *port);
 void serial_disable_rx_interrupt(serial_port_t *port);
 void serial_process_rx(serial_port_t *port);
 

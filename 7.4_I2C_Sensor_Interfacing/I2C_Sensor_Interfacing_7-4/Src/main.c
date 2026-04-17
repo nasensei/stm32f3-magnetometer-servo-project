@@ -18,7 +18,23 @@
 uint32_t SystemCoreClock = 8000000; //jank workaround for jank directory stuff
 volatile uint32_t system_time_ms = 0;
 
+void SysTick_Handler(void) {
+    system_time_ms++;\
 
+}
+
+void init_protocol(void) {
+
+    enable_I2C_clocks();
+    configure_I2C();
+    init_magnetometer();
+    enable_LED_clocks();
+    configure_LEDs();
+    SysTick_Config(SystemCoreClock / 1000); // 1ms per tick
+
+    serial_init(&serial_console, &SERIAL_HW_USART1_PC4_PC5, 8000000U, 115200U);
+    serial_send_string(&serial_console, "UART OK\r\n");
+}
 
 int main(void)
 {
@@ -40,6 +56,12 @@ int main(void)
         // Compute heading, store in struct
         compute_heading(&mag);
 
+        char data_2_print[100];
+        snprintf(data_2_print, sizeof(data_2_print), "X: %.2f Y: %.2f Z: %.2f Heading: %.2f deg\r\n", mag.fx, mag.fy, mag.fz, mag.heading);
+
+        serial_send_string(&serial_console, data_2_print);
+        for (volatile int i = 0; i < 10000; i++);
+
         // Display on LED ring
         display_heading_led(mag.heading);
         delay();
@@ -47,18 +69,6 @@ int main(void)
 
 }
 
-void SysTick_Handler(void) {
-    system_time_ms++;
-}
 
-void init_protocol(void) {
 
-    enable_I2C_clocks();
-    configure_I2C();
-    init_magnetometer();
-    enable_LED_clocks();
-    configure_LEDs();
-    SysTick_Config(SystemCoreClock / 1000); // 1ms per tick
-
-}
 

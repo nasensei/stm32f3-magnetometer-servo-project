@@ -1,9 +1,6 @@
 #include "serial.h"
 #include "stm32f303xc.h"
 
-#define USART1_TX_PIN   4U   /* PC4 -> USART1_TX */
-#define USART1_RX_PIN   5U   /* PC5 -> USART1_RX */
-#define USART_AF_NUM    7U   /* AF7 for USART1 */
 // maybe we can change these timeout values in the future
 #define SERIAL_TX_TIMEOUT 1000000U
 #define SERIAL_RX_TIMEOUT 1000000U
@@ -163,6 +160,57 @@ static bool serial_tx_queue_full(const serial_port_t *port)
     return (serial_tx_next_index(port->tx_head) == port->tx_tail);
 }
 
+/*static bool serial_tx_enqueue(serial_port_t *port, uint8_t byte)
+{
+    uint32_t timeout = SERIAL_TX_TIMEOUT;
+    USART_TypeDef *uart;
+
+    if ((port == NULL) || (port->hw == NULL)) {
+        return false;
+    }
+
+    uart = port->hw->uart;
+
+    while (timeout-- != 0U) {
+        uint32_t primask = __get_PRIMASK();
+        bool was_empty;
+
+        __disable_irq();
+
+        was_empty = serial_tx_queue_empty(port);
+
+        if (!serial_tx_queue_full(port)) {
+            port->tx_buffer[port->tx_head] = byte;
+            port->tx_head = serial_tx_next_index(port->tx_head);
+
+
+             * Prime the transmitter:
+             * if queue was empty and hardware TX register is empty,
+             * send the first queued byte immediately.
+
+            if (was_empty && ((uart->ISR & USART_ISR_TXE) != 0U)) {
+                uart->TDR = port->tx_buffer[port->tx_tail];
+                port->tx_tail = serial_tx_next_index(port->tx_tail);
+            }
+
+
+             * Enable TXE interrupt so remaining queued bytes are sent by ISR.
+
+            uart->CR1 |= USART_CR1_TXEIE;
+
+            if (primask == 0U) {
+                __enable_irq();
+            }
+            return true;
+        }
+
+        if (primask == 0U) {
+            __enable_irq();
+        }
+    }
+
+    return false;
+}*/
 static bool serial_tx_enqueue(serial_port_t *port, uint8_t byte)
 {
     uint32_t timeout = SERIAL_TX_TIMEOUT;
@@ -242,6 +290,7 @@ bool serial_init(serial_port_t *port,
     return true;
 }
 
+
 bool serial_write_byte(serial_port_t *port, uint8_t byte)
 {
     USART_TypeDef *uart;
@@ -260,6 +309,39 @@ bool serial_write_byte(serial_port_t *port, uint8_t byte)
     return serial_tx_enqueue(port, byte);
 }
 
+/*bool serial_write_byte(serial_port_t *port, uint8_t byte)
+{
+    uint32_t timeout = SERIAL_TX_TIMEOUT;
+    USART_TypeDef *uart;
+
+    if ((port == NULL) || (port->hw == NULL)) {
+        return false;
+    }
+
+    uart = port->hw->uart;
+
+    if ((uart->CR1 & (USART_CR1_UE | USART_CR1_TE)) !=
+        (USART_CR1_UE | USART_CR1_TE)) {
+        return false;
+    }
+
+    while ((uart->ISR & USART_ISR_TXE) == 0U) {
+        if (timeout-- == 0U) {
+            return false;
+        }
+    }
+
+    uart->TDR = byte;
+
+    timeout = SERIAL_TX_TIMEOUT;
+    while ((uart->ISR & USART_ISR_TC) == 0U) {
+        if (timeout-- == 0U) {
+            return false;
+        }
+    }
+
+    return true;
+}*/
 bool serial_read_byte(serial_port_t *port, uint8_t *out_byte)
 {
     uint32_t timeout = SERIAL_RX_TIMEOUT;
@@ -371,13 +453,13 @@ void serial_set_receive_callback(serial_port_t *port, serial_rx_callback_t callb
     port->rx_callback = callback;
 }
 
-void serial_enable_rx_interrupt(serial_port_t *port)
+bool serial_enable_rx_interrupt(serial_port_t *port)
 {
     volatile uint8_t dummy;
     USART_TypeDef *uart;
 
     if ((port == NULL) || (port->hw == NULL)) {
-        return;
+        return false;
     }
 
     uart = port->hw->uart;
@@ -395,6 +477,8 @@ void serial_enable_rx_interrupt(serial_port_t *port)
     }
 
     uart->CR1 |= USART_CR1_RXNEIE;
+
+    return ((uart->CR1 & USART_CR1_RXNEIE) != 0U);
 }
 
 void serial_disable_rx_interrupt(serial_port_t *port)
@@ -510,12 +594,12 @@ void serial_irq_handler(serial_port_t *port)
     }
 }
 
-void USART1_IRQHandler(void)
+void USART1_EXTI25_IRQHandler(void)
 {
     serial_irq_handler(&serial_console);
 }
 
-void UART4_IRQHandler(void)
+void UART4_EXTI34_IRQHandler(void)
 {
     serial_irq_handler(&serial_link);
 }
