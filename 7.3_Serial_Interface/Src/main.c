@@ -16,19 +16,35 @@
  ******************************************************************************
  */
 
+/**
+ * The OVERALL PURPOSE of main.c
+ * 1. include the required headers
+ * 2. define a small structured message format
+ * 3. define a few helper functions
+ * 4. define a callback function for received packets
+ * 5. run the serial interface demo in main()
+ */
+
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "serial.h"
+#include "stm32f303xc.h"
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
 #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
-typedef struct __attribute__((packed)) {
-    int16_t heading_deg_x10;
-    uint8_t button_pressed;
-    uint16_t sample_count;
-} HeadingMessage;
 
+typedef struct __attribute__((packed)) {
+    uint16_t direction_deg_x10; // this will store direction as degrees x 10
+    uint8_t display_mode;   // DISPLAY_MODE_SERVO or DISPLAY_MODE_LED
+    uint16_t sample_count;  // this stores how many samples were counted
+} DirectionPacket;
+
+//
 static void delay_cycles(volatile uint32_t count)
 {
     while (count--) {
@@ -39,97 +55,235 @@ static void delay_cycles(volatile uint32_t count)
 static void halt_forever(void)
 {
     for (;;) {
-        /* stop here if something fails */
+        // stop here if something fails
     }
 }
 
-static void on_serial_msg_received(const uint8_t *msg, uint8_t bytes_received)
-{
-    uint8_t payload_size = msg[1];
-    uint8_t msg_type = msg[2];
 
-    (void)bytes_received;
-    (void)payload_size;
+/* small flags for demo:
+ * g_rx_packet_seen becomes 1 when a valid packet callback happens
+ * g_rx_demo_reported stops printing the success message again and again
+*/
+static volatile uint8_t g_rx_packet_seen = 0U;
+static volatile uint8_t g_rx_demo_reported = 0U;
 
-    switch (msg_type) {
-    case SERIAL_MSG_HEADING:
-        (void)serial_send_string("Received heading packet\r\n");
-        break;
+/* The job of this below function:
+ * 1. take the received packet from the serial module
+ * 2. check that it looks like the kind of message that is expected
+ * 3. extract the payload into DirectionPacket struct
+ * 4. turn that data into readable text
+ * 5. print the result back to the terminal
+*/
 
-    case SERIAL_MSG_BUTTON:
-        (void)serial_send_string("Received button packet\r\n");
-        break;
+/* PARAMETERS:
+ * serial_port_t *port: which serial port received the message
+ * const uint8_t *msg: this is the pointer to the raw received packet bytes
+ * uint8_t bytes_received: how many bytes are inside msg
+ *
+*/
+static void on_serial_msg_received(serial_port_t *port, const uint8_t *msg, uint8_t bytes_received) {
+    uint8_t payload_size;
+    uint8_t msg_type;    // right now, we only have 1 msg type which is the direction but this can be used for future use
+    DirectionPacket packet;
+    char text[96];  // A text buffer for the final printable message
 
-    default:
-        (void)serial_send_string("Received packet\r\n");
-        break;
+    int whole_deg;
+    int frac_deg;
+    const char *mode_text;   // either LED or SERVO
+
+    if (msg == NULL) {
+        return;
     }
+
+    if (bytes_received < SERIAL_PACKET_OVERHEAD) {
+        return;
+    }
+
+    payload_size = msg[1];
+    msg_type = msg[2];
+
+    if (msg_type != SERIAL_MSG_DIRECTION) {
+        (void)serial_send_string(port, "Received unknown/invalid packet\r\n");
+        return;
+    }
+
+    if (payload_size != sizeof(DirectionPacket)) {
+        (void)serial_send_string(port, "Received unknown/invalid packet\r\n");
+        return;
+    }
+
+    if (bytes_received != (uint8_t)(SERIAL_PACKET_OVERHEAD + sizeof(DirectionPacket))) {
+        (void)serial_send_string(port, "Received unknown/invalid packet\r\n");
+        return;
+    }
+
+    // copying the [payload] into packet to extract the direction msg to decode
+    memcpy(&packet, &msg[3], sizeof(packet));
+
+    whole_deg = packet.direction_deg_x10 / 10;
+    frac_deg = packet.direction_deg_x10 % 10;
+
+    if (frac_deg < 0) {
+        frac_deg = -frac_deg;
+    }
+
+    if (packet.display_mode == DISPLAY_MODE_LED) {
+        mode_text = "LED";
+    } else if (packet.display_mode == DISPLAY_MODE_SERVO) {
+        mode_text = "SERVO";
+    }
+
+    // this to build the output string
+    (void)snprintf(text,
+                   sizeof(text),
+                   "RX direction=%d.%d deg, mode=%s, count=%u\r\n",
+                   whole_deg,
+                   frac_deg,
+                   mode_text,
+                   (unsigned int)packet.sample_count);
+
+    // send the result to the serial terminal
+    (void)serial_send_string(port, text);
+    g_rx_packet_seen = 1U;
 }
+
+//------------------------------------HELPER FUNCTIONS FOR DEMO------------------------------------
+static void error_led_init(void) {
+    /* Enable clock for GPIOE */
+    RCC->AHBENR |= RCC_AHBENR_GPIOEEN;
+
+    /* Configure PE9 (LD3 red LED) as general-purpose output */
+    GPIOE->MODER &= ~(0x3U << (9U * 2U));
+    GPIOE->MODER |=  (0x1U << (9U * 2U));
+
+    /* Push-pull output */
+    GPIOE->OTYPER &= ~(1U << 9U);
+
+    /* Optional: medium/high speed */
+    GPIOE->OSPEEDR &= ~(0x3U << (9U * 2U));
+    GPIOE->OSPEEDR |=  (0x1U << (9U * 2U));
+
+    /* No pull-up / pull-down */
+    GPIOE->PUPDR &= ~(0x3U << (9U * 2U));
+}
+
+static void error_led_on(void) {
+    GPIOE->BSRR = (1U << 9U);
+}
+
+
+//------------------------------------DEMO------------------------------------
+// this demo will focus on USART1 ONLY
+// will implement UART4 on integration
 
 int main(void)
 {
+
     uint8_t rx_buf[4];
-    HeadingMessage msg;
-    serial_set_receive_callback(on_serial_msg_received);
+    DirectionPacket msg;
 
-    /* If later configure clocks, update this value accordingly */
-    serial_init(8000000UL, 115200UL);
-
-    if (!serial_send_string("USART1 ready\r\n")) {
+    /* PARAMETERS:
+     * serial_console: serial port instance
+     * 8000000UL: peripheral clock frequency: 8 MHz
+     * 115200UL: baud rate
+     */
+    if (!serial_init(&serial_console,
+                     &SERIAL_HW_USART1_PC4_PC5,
+                     8000000UL,
+                     115200UL)) {
+    	// turn on LED error here
+    	error_led_init();
+    	error_led_on();
         halt_forever();
     }
+    (void)serial_send_string(&serial_console, "serial init ok\r\n");
 
-    if (!serial_send_string("Type 4 characters in your serial terminal:\r\n")) {
-        halt_forever();
-    }
+    // when a complete received packet is ready on serial_console, call on_serial_msg_received()
+    serial_set_receive_callback(&serial_console, on_serial_msg_received);
+
+    (void)serial_send_string(&serial_console, "USART1 console ready\r\n");
+    (void)serial_send_string(&serial_console, "Type 4 characters in your serial terminal:\r\n");
 
     /* Task a: receive raw bytes of known length */
-    if (!serial_recv_bytes(rx_buf, sizeof(rx_buf))) {
-        (void)serial_send_string("RX timeout or receive error\r\n");
+    if (!serial_recv_bytes(&serial_console, rx_buf, sizeof(rx_buf))) {
+        (void)serial_send_string(&serial_console, "RX timeout or receive error.\r\n");
+    	error_led_init();
+    	error_led_on();
         halt_forever();
     }
 
-    if (!serial_send_string("Received bytes: ")) {
+    (void)serial_send_string(&serial_console, "Received bytes: ");
+    if (!serial_send_bytes(&serial_console, rx_buf, sizeof(rx_buf))) {
+    	(void)serial_send_string(&serial_console, "RX timeout or send actual raw bytes error part a.\r\n");
+    	error_led_init();
+    	error_led_on();
         halt_forever();
     }
-
-    if (!serial_send_bytes(rx_buf, sizeof(rx_buf))) {
-        halt_forever();
-    }
-
-    if (!serial_send_string("\r\n")) {
-        halt_forever();
-    }
+    (void)serial_send_string(&serial_console, "\r\n");
+    (void)serial_send_string(&serial_console, "Done task a demo!!\r\n");
 
     /* Task b: debug string */
-    if (!serial_send_string("sendString() is working\r\n")) {
+    (void)serial_send_string(&serial_console, "sendString() is working for task b demo!\r\n");
+
+    /* Task c: send structured message
+     * set these variable for the demo
+    */
+    msg.direction_deg_x10 = 1234;             /* 123.4 degrees */
+    msg.display_mode = DISPLAY_MODE_SERVO;    /* servo mode */
+    msg.sample_count = 42U;
+
+    (void)serial_send_string(&serial_console, "Sending framed binary packet...\r\n");
+    if (!serial_send_msg(&serial_console,
+                         SERIAL_MSG_DIRECTION,
+                         &msg,
+                         (uint8_t)sizeof(msg))) {
+        (void)serial_send_string(&serial_console, "sendMsg failed for task c.\r\n");
+    	error_led_init();
+    	error_led_on();
+        halt_forever();
+    }
+    (void)serial_send_string(&serial_console, "Done task c demo!!\r\n");
+
+
+    /* Task e: enable interrupt-driven receive */
+    if (!serial_enable_rx_interrupt(&serial_console)) {
+        error_led_init();
+        error_led_on();
         halt_forever();
     }
 
-    /* Task c: send structured message */
-    msg.heading_deg_x10 = 1234;   /* 123.4 degrees */
-    msg.button_pressed  = 1U;
-    msg.sample_count    = 42U;
+    (void)serial_send_string(&serial_console,
+                             "\r\nTask e: RX interrupt enabled successfully.\r\n");
+    (void)serial_send_string(&serial_console,
+                             "Now send a valid framed packet from the terminal.\r\n");
 
-    if (!serial_send_string("Sending framed binary packet...\r\n")) {
-        halt_forever();
-    }
+    /* Task f: demonstrate interrupt-driven transmit */
+    (void)serial_send_string(&serial_console,
+                             "Task f: queuing a long TX burst using interrupt-driven transmit...\r\n");
 
-    if (!serial_send_msg(SERIAL_MSG_HEADING, &msg, sizeof(msg))) {
-        (void)serial_send_string("sendMsg failed\r\n");
-        halt_forever();
-    }
-
-    /* Task e: switch RX to interrupt mode */
-    erial_enable_rx_interrupt();
-
-    if (!serial_send_string("RX interrupt mode enabled\r\n")) {
-       halt_forever();
-    }
+    uint32_t tx_counter = 0U;
 
     for (;;) {
-        serial_process_rx();   /* validate + callback if a full packet arrived */
-        (void)serial_send_string("Heartbeat\r\n");
-        delay_cycles(800000U);
+        serial_process_rx(&serial_console);
+
+        if ((tx_counter % 20U) == 0U) {
+            //(void)serial_send_string(&serial_console, "TX burst during RX test: ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\n");
+            if (!serial_send_string(&serial_console,
+                    "TX burst during RX test: ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 abcdefghijklmnopqrstuvwxyz\r\n")){
+            	error_led_init();
+            	error_led_on();
+            	halt_forever();
+            }
+        }
+
+        if ((g_rx_packet_seen != 0U) && (g_rx_demo_reported == 0U)) {
+            (void)serial_send_string(&serial_console,
+                                     "Task e/f demo passed: RX packet handled while TX interrupt traffic is active.\r\n");
+            g_rx_demo_reported = 1U;
+        }
+
+        tx_counter++;
+        delay_cycles(200000U);
     }
+
 }
