@@ -39,6 +39,7 @@
 #endif
 
 uint32_t SystemCoreClock = 8000000U;
+// global millisecond counter
 volatile uint32_t system_time_ms = 0U;
 
 /*
@@ -51,10 +52,11 @@ volatile uint32_t system_time_ms = 0U;
 #define BUTTON_PIN          0U
 #define BUTTON_DEBOUNCE_MS  150U
 
-static volatile uint8_t g_display_mode = DISPLAY_MODE_SERVO;
-static volatile uint8_t g_mode_changed = 0U;
-static volatile uint32_t g_last_button_ms = 0U;
+static volatile uint8_t g_display_mode = DISPLAY_MODE_SERVO; // current output mode of the system
+static volatile uint8_t g_mode_changed = 0U; // this is a flag, 0 = no new change, 1 = mode has just changed
+static volatile uint32_t g_last_button_ms = 0U; // // this store the last time the button was accepted, for debouncing
 
+//this is interrupt service routine for the SysTick timer
 void SysTick_Handler(void)
 {
     system_time_ms++;
@@ -139,6 +141,7 @@ static uint8_t send_direction_packet(uint16_t heading_deg_x10)
                            (uint8_t)sizeof(payload));
 }
 
+// this is setup function. it initialises all the peripherals and modules used by this program
 static void init_protocol(void)
 {
     enable_I2C_clocks();
@@ -170,11 +173,20 @@ static void init_protocol(void)
 
 int main(void)
 {
+	// enables the floating-point unit, FPU
     SCB->CPACR |= (0xFU << 20);
+    // runs setup
     init_protocol();
 
+    /* creates a local variable mag of type magnetormeter_data and initialises all fields to zero
+     * read mag.h to see the struct magnetometer_data
+     */
     magnetometer_data mag = {0};
 
+    /* min/max variables for callibration
+     * initialises the min observed raw magnetic readings to the largest positive 16 bit value
+     * why: when real data strats coming in, almost any measured value will be lower than 32767
+     */
     int16_t min_x =  32767;
     int16_t min_y =  32767;
     int16_t min_z =  32767;
@@ -182,6 +194,7 @@ int main(void)
     int16_t max_y = -32768;
     int16_t max_z = -32768;
 
+    // offset variables: these store the estimated hard-iron offsets for each axis
     float offset_x = 0.0f;
     float offset_y = 0.0f;
     float offset_z = 0.0f;
@@ -189,17 +202,21 @@ int main(void)
     uint32_t last_tx_ms = 0U;
     uint32_t last_debug_ms = 0U;
 
+    // check if the return value says the wrong ID, the magnetometer is not connected or not responding properly
     if (!mag_who_am_i_ok()) {
         (void)serial_send_string(&serial_console, "MAG WHO_AM_I FAIL\r\n");
         halt_forever();
     }
 
+    // setting all the offsets to zero
     set_hard_iron_offsets(&mag, 0.0f, 0.0f, 0.0f);
 
     while (1) {
+    	// read new sensor data
         read_magnetometer(&mag);
 
         /* live hard-iron calibration update */
+        // setting all the real min/max val
         if (mag.raw_x < min_x) min_x = mag.raw_x;
         if (mag.raw_y < min_y) min_y = mag.raw_y;
         if (mag.raw_z < min_z) min_z = mag.raw_z;
@@ -214,22 +231,26 @@ int main(void)
 
         set_hard_iron_offsets(&mag, offset_x, offset_y, offset_z);
 
+        //applies the hard-iron correction to the raw readings.
         apply_hard_iron_calibration(&mag);
-        low_pass_filter(&mag);
-        compute_heading(&mag);
+        low_pass_filter(&mag); // applies the filtering to smooth noisy readings
+        compute_heading(&mag); // uses the corrected magnetic values to compute the heading angle
 
         /*
-         * Convert heading to 0.1 degree units.
+         * Convert heading to 0.1 degree units with wrap-around 360deg
          * Example: 123.4 deg -> 1234
          */
         uint16_t heading_deg_x10 = (uint16_t)(mag.heading * 10.0f + 0.5f);
         if (heading_deg_x10 >= 3600U) {
-            heading_deg_x10 = 0U;
+        	heading_deg_x10 %= 3600U;
         }
 
         /*
          * Send to board 2 at a controlled rate.
-         * 50 ms = 20 Hz, matching your magnetometer output rate reasonably well.
+         * 50 ms = 20 Hz, sending 20 packets per second
+         * only send a new direction packet every 50ms
+         * if sending fails, print an error to the USART1 debug console
+         * after that, record the send time
          */
         if ((system_time_ms - last_tx_ms) >= 50U) {
             if (!send_direction_packet(heading_deg_x10)) {
