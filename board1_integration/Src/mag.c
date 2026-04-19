@@ -12,6 +12,12 @@
 
 extern volatile uint32_t system_time_ms;
 
+/*
+ * it takes a register address
+ * creates a local byte v
+ * calls I2C_get_data() to read exactly 1 byte from that register
+ * returns that byte
+ */
 static uint8_t mag_read_reg(uint8_t reg)
 {
     uint8_t v = 0;
@@ -21,7 +27,7 @@ static uint8_t mag_read_reg(uint8_t reg)
 
 static void mag_write_reg(uint8_t reg, uint8_t value)
 {
-    I2C_write(MAG_ADD, reg, &value, 1);
+    I2C_write(MAG_ADD, reg, &value, 1); // calls I2C_write() to write exactly 1 byte to that register
 }
 
 static int mag_data_ready(void)
@@ -75,8 +81,16 @@ void read_magnetometer(magnetometer_data *mag)
         /* wait for fresh XYZ sample */
     }
 
+    /* this performs the actual I2C read
+     * device address = MAG_ADD
+     * starting register = MAG_OUT_START | 0x80
+     * | 0x80 is commonly used with sensors to enable auto-increment so multiple consecutive registers can be read in one burst
+     * destination = buffer
+     * number of bytes = 6
+     */
     I2C_get_data(MAG_ADD, MAG_OUT_START | 0x80, buffer, 6);
 
+    // combine pairs of bytes into signed 16-bit values
     mag->raw_x = (int16_t)((buffer[1] << 8) | buffer[0]);
     mag->raw_y = (int16_t)((buffer[3] << 8) | buffer[2]);
     mag->raw_z = (int16_t)((buffer[5] << 8) | buffer[4]);
@@ -84,6 +98,7 @@ void read_magnetometer(magnetometer_data *mag)
     mag->timestamp = system_time_ms;
 }
 
+// this is just math!!
 void apply_hard_iron_calibration(magnetometer_data *mag)
 {
     mag->mx = (float)mag->raw_x - mag->offset_x;
@@ -91,6 +106,7 @@ void apply_hard_iron_calibration(magnetometer_data *mag)
     mag->mz = (float)mag->raw_z - mag->offset_z;
 }
 
+// this function smooths the corrected magnetic values
 void low_pass_filter(magnetometer_data *mag)
 {
     static uint8_t first = 1U;
@@ -108,6 +124,7 @@ void low_pass_filter(magnetometer_data *mag)
     mag->fz = ALPHA * mag->mz + (1.0f - ALPHA) * mag->fz;
 }
 
+// this selects which filtered magnetic components are used to compute heading
 void compute_heading(magnetometer_data *mag)
 {
     /*
