@@ -66,6 +66,11 @@ static void error_led_on(void)
     GPIOE->BSRR = (1U << 9U);
 }
 
+static void error_led_on1(void)
+{
+    GPIOE->BSRR = (1U << 10U);
+}
+
 /*
  * Board 1 payload format:
  * [LED_MODE][HEADING_LO][HEADING_HI]
@@ -89,11 +94,21 @@ static void on_link_msg_received(serial_port_t *port, const uint8_t *msg, uint8_
 
     (void)port;
 
+//    error_led_init();
+//	error_led_on1();
+//	halt_forever();
+
     if (msg == NULL) {
+    	error_led_init();
+		error_led_on();
+		halt_forever();
         return;
     }
 
     if (bytes_received < SERIAL_PACKET_OVERHEAD) {
+    	error_led_init();
+		error_led_on1();
+		halt_forever();
         return;
     }
 

@@ -268,8 +268,7 @@ static bool serial_tx_enqueue(serial_port_t *port, uint8_t byte)
 }
 
 // initialise one serial port instance
-bool serial_init(serials_port_t *port, const serial_hw_t *hw, uint32_t peripheral_clock_hz, uint32_t baud)
-{
+bool serial_init(serial_port_t *port, const serial_hw_t *hw, uint32_t peripheral_clock_hz, uint32_t baud) {
     if ((port == NULL) || (hw == NULL) || (baud == 0U)) {
         return false;
     }
