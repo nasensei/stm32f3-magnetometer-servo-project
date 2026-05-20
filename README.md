@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ### README
 # MTRX2700 Assignment 2 — Programming a Microcontroller in C
 
