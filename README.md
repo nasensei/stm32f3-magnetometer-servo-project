@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ### README
 # MTRX2700 Assignment 2 — Programming a Microcontroller in C
 
@@ -73,3 +74,6 @@ MTRX2700-assignment-2/
 │   ├── <meeting agenda/minutes files>
 │   └── <planning notes>
 └── README.md
+=======
+# stm32f3-magnetometer-servo-project
+>>>>>>> 4f3b72716a894e8f8477a75286b01d316c8975dd
